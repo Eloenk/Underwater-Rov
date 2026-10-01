@@ -1,0 +1,53 @@
+# ==============================================================================
+# Pipe Crack Detection Configuration (Orange Pi 4 Pro / BlueOS)
+# ==============================================================================
+
+# Hardware Acceleration Backend Options:
+#  - "onnx"      : ONNX Runtime (ARM CPU / OpenCL GPU)
+#  - "opencv"    : OpenCV DNN module (ONNX / TFLite backend)
+#  - "tflite"    : TensorFlow Lite Runtime (INT8 / FP16)
+#  - "npu_viplite": Allwinner A733 Vivante VIP9000 NPU (.nbg compiled graph)
+#  - "auto"      : Automatically select best available backend
+backend: "auto"
+
+# Model File Settings
+model:
+  onnx_path: "models/yolov8n_crack.onnx"
+  tflite_path: "models/yolov8n_crack_int8.tflite"
+  nbg_path: "models/yolov8n_crack.nbg"
+  input_size: [640, 640]
+  confidence_threshold: 0.40
+  nms_threshold: 0.45
+
+# Video Input Settings
+camera:
+  # Python is a consumer of Go's V4L2 video stream (prevents "device busy" hardware lockups)
+  source: "http://127.0.0.1:8081/stream"
+  width: 1280
+  height: 720
+  fps: 30
+  fourcc: "MJPG"
+
+# Pipe Crack Analysis & Severity Thresholds
+analysis:
+  mm_per_pixel: 0.25
+  severity:
+    minor_max_mm: 1.0       # < 1.0 mm -> Low Severity (Green)
+    moderate_max_mm: 2.5    # 1.0 - 2.5 mm -> Medium Severity (Yellow)
+
+  use_roi: false
+  roi_box: [0.1, 0.1, 0.9, 0.9]
+
+# HTTP MJPEG Live Stream Server for BlueOS Overlay / Browser
+stream_server:
+  enabled: true
+  host: "0.0.0.0"
+  port: 8082 # Changed from 8080 to prevent port collision with Go Companion Dashboard
+  quality: 80
+
+# MAVLink Telemetry Integration (BlueOS / QGroundControl)
+mavlink:
+  enabled: true
+  connection_string: "udpout:127.0.0.1:14550"
+  send_statustext: true
+  alert_interval_sec: 2.0
