@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Model Exporter & NPU Graph Compiler helper for Orange Pi 4 Pro.
-Converts PyTorch YOLOv8 models to ONNX, TFLite (INT8), and prints ACUITY NBG instructions.
-"""
 
 import os
 import argparse
@@ -12,9 +8,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ModelExporter")
 
 def export_yolov8(weights="yolov8n.pt", output_dir="models", imgsz=640):
-    """
-    Exports a YOLOv8 PyTorch checkpoint to ONNX format.
-    """
     os.makedirs(output_dir, exist_ok=True)
     logger.info(f"Loading YOLOv8 weights: {weights}")
     
@@ -22,28 +15,24 @@ def export_yolov8(weights="yolov8n.pt", output_dir="models", imgsz=640):
         from ultralytics import YOLO
         model = YOLO(weights)
         
-        # Export to ONNX format
         onnx_path = model.export(format="onnx", imgsz=imgsz, dynamic=False, opset=12)
         logger.info(f"Successfully exported ONNX model to: {onnx_path}")
         
-        # Move to models directory
         target_onnx = os.path.join(output_dir, "yolov8n_crack.onnx")
-        os.rename(onnx_path, target_onnx)
+        if os.path.exists(onnx_path) and onnx_path != target_onnx:
+            os.rename(onnx_path, target_onnx)
         logger.info(f"Saved ONNX model as: {target_onnx}")
         return target_onnx
     except ImportError:
-        logger.error("ultralytics package is required for export. Install via `pip install ultralytics`.")
+        logger.error("ultralytics package is required for export. Install via 'pip install ultralytics'.")
         return None
 
 def print_acuity_npu_instructions(onnx_path="models/yolov8n_crack.onnx"):
-    """
-    Prints step-by-step commands to convert ONNX model to .nbg for Vivante VIP9000 NPU (Allwinner A733).
-    """
     print("\n" + "="*80)
     print(" ALLWINNER A733 (VIVANTE VIP9000) NPU COMPILATION GUIDE (ACUITY TOOLKIT)")
     print("="*80)
     print(f"""
-To accelerate crack detection on the Orange Pi 4 Pro 3 TOPS NPU, compile your ONNX model
+To accelerate defect detection on the Orange Pi 4 Pro 3 TOPS NPU, compile your ONNX model
 to an NBG (Network Binary Graph) file using the Vivante ACUITY toolchain:
 
 Step 1: Convert ONNX Model to ACUITY Internal Format (.json / .data)
@@ -78,8 +67,8 @@ $ pegasus exportovxlib \\
     --output-path models/yolov8n_crack.nbg \\
     --pack-nbg-unify
 
-Place the generated `models/yolov8n_crack.nbg` in your project folder!
-Set `backend: "npu_viplite"` in `config.yaml` to run on the NPU hardware.
+Place the generated 'models/yolov8n_crack.nbg' in your project folder!
+Set 'backend: npu_viplite' in config.yaml to run on the NPU hardware.
 """)
     print("="*80 + "\n")
 

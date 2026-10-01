@@ -1,0 +1,29 @@
+[Unit]
+Description=ROV Companion Computer Service (Go Native Daemon)
+After=network.target local-fs.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/companion
+ExecStart=/opt/companion/companion --config /opt/companion/companion.yaml
+Restart=always
+RestartSec=3s
+LimitNOFILE=65536
+
+# Systemd Journal Rate Limiting
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=rov-companion
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=500
+
+# Security & Isolation
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+

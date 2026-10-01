@@ -14,7 +14,7 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-logger = logging.getLogger("CrackDetector")
+logger = logging.getLogger("PipeDetector")
 
 from engines import ONNXEngine, OpenCVEngine, TFLiteEngine, VIPLiteNPUEngine
 from analysis import PipeCrackAnalyzer
@@ -82,7 +82,7 @@ def select_engine(cfg):
         raise ValueError(f"Unknown backend type: {backend}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Pipe Crack Detection System for Orange Pi 4 Pro")
+    parser = argparse.ArgumentParser(description="Pipe Surface Defect Detection System for Orange Pi 4 Pro")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
     parser.add_argument("--source", type=str, default=None, help="Camera device index (0) or RTSP URL")
     parser.add_argument("--backend", type=str, default=None, help="Override inference backend (onnx, opencv, tflite, npu_viplite)")
@@ -93,7 +93,7 @@ def main():
         cfg["backend"] = args.backend
 
     cam_cfg = cfg.get("camera", {})
-    source = args.source if args.source is not None else cam_cfg.get("source", 0)
+    source = args.source if args.source is not None else cam_cfg.get("source", "http://127.0.0.1:8081/stream")
     
     camera = CameraReader(
         source=source,
@@ -104,12 +104,8 @@ def main():
     )
     camera.start()
 
-    ana_cfg = cfg.get("analysis", {})
-    sev_cfg = ana_cfg.get("severity", {})
     analyzer = PipeCrackAnalyzer(
-        mm_per_pixel=ana_cfg.get("mm_per_pixel", 0.25),
-        minor_max_mm=sev_cfg.get("minor_max_mm", 1.0),
-        moderate_max_mm=sev_cfg.get("moderate_max_mm", 2.5)
+        confidence_threshold=cfg.get("model", {}).get("confidence_threshold", 0.40)
     )
 
     try:
@@ -134,7 +130,7 @@ def main():
     if stream_cfg.get("enabled", True):
         stream_server = MJPEGServer(
             host=stream_cfg.get("host", "0.0.0.0"),
-            port=stream_cfg.get("port", 8080),
+            port=stream_cfg.get("port", 8082),
             quality=stream_cfg.get("quality", 80)
         )
         stream_server.start(lambda: latest_processed_frame)
@@ -161,16 +157,12 @@ def main():
                     logger.error(f"Inference error: {e}")
 
             analysis_results = []
-            critical_alerts = []
-
             for det in detections:
                 res = analyzer.analyze_detection(frame, det)
                 analysis_results.append(res)
-                if res['severity'] in ['Medium', 'Critical']:
-                    critical_alerts.append(res)
 
-            if mavlink and critical_alerts:
-                mavlink.send_crack_alert(critical_alerts)
+            if mavlink and analysis_results:
+                mavlink.send_defect_alert(analysis_results)
 
             dt = time.perf_counter() - t_last
             t_last = time.perf_counter()
@@ -193,4 +185,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

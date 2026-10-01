@@ -331,29 +331,12 @@ func queryV4L2Device(devPath string) (string, []Format, error) {
 		}
 
 		if !resFound {
-			resList := []struct{ w, h, fps int }{
-				{1920, 1080, 30},
-				{1280, 720, 30},
-				{640, 480, 30},
-			}
-			for _, r := range resList {
-				formats = append(formats, Format{
-					FourCC: fourCC,
-					Width:  r.w,
-					Height: r.h,
-					MaxFPS: r.fps,
-				})
-			}
+			continue
 		}
 	}
 
 	if len(formats) == 0 {
-		formats = []Format{
-			{FourCC: "MJPG", Width: 1920, Height: 1080, MaxFPS: 30},
-			{FourCC: "MJPG", Width: 1280, Height: 720, MaxFPS: 30},
-			{FourCC: "MJPG", Width: 640, Height: 480, MaxFPS: 30},
-			{FourCC: "YUYV", Width: 640, Height: 480, MaxFPS: 30},
-		}
+		return "", nil, fmt.Errorf("no supported hardware video formats enumerated for device %s", devPath)
 	}
 
 	return name, formats, nil

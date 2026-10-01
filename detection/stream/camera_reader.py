@@ -6,19 +6,10 @@ import threading
 import logging
 import cv2
 
-logger = logging.getLogger("CrackDetector.CameraReader")
+logger = logging.getLogger("PipeDetector.CameraReader")
 
 class CameraReader:
-    """
-    Multi-threaded low-latency USB camera reader and stream engine.
-    Features:
-    - Auto-scans USB camera devices (/dev/video* on Linux, 0..5 on Windows).
-    - Supports USB V4L2 hardware MJPEG compression for ultra low-latency.
-    - Automatic reconnection & hotplug handling if USB camera cable is toggled.
-    - Integrated underwater image clarity pre-processing (CLAHE / White Balance).
-    """
-
-    def __init__(self, source="auto", width=1280, height=720, fps=30, fourcc="MJPG", enable_enhancer=False):
+    def __init__(self, source="http://127.0.0.1:8081/stream", width=1280, height=720, fps=30, fourcc="MJPG", enable_enhancer=False):
         self.source = source
         self.width = width
         self.height = height
@@ -36,14 +27,11 @@ class CameraReader:
         self.actual_source = None
         self.device_info = "Disconnected"
 
-        # Initialize CLAHE contrast enhancer for underwater video preprocessing
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
 
     @staticmethod
     def scan_usb_cameras(max_indices=8):
-        """Scans system USB video devices and returns list of openable cameras with metadata."""
         devices = []
-        
         if sys.platform.startswith("linux"):
             video_nodes = sorted(glob.glob("/dev/video*"))
             for node in video_nodes:
@@ -59,7 +47,6 @@ class CameraReader:
                 except Exception:
                     continue
         else:
-            # Windows / macOS search camera indices
             for idx in range(max_indices):
                 try:
                     cap = cv2.VideoCapture(idx, cv2.CAP_DSHOW if sys.platform.startswith("win") else cv2.CAP_ANY)
@@ -76,14 +63,12 @@ class CameraReader:
         return devices
 
     def start(self):
-        """Starts background frame capture worker thread."""
         self.running = True
         self.thread = threading.Thread(target=self._update_loop, daemon=True)
         self.thread.start()
         logger.info("Camera capture worker thread started.")
 
     def _resolve_source(self):
-        """Resolves auto-discovery or converts index strings to int."""
         if self.source == "auto" or self.source is None:
             cams = self.scan_usb_cameras()
             if cams:
@@ -98,14 +83,12 @@ class CameraReader:
         return self.source
 
     def _open_capture(self):
-        """Initializes OpenCV VideoCapture with hardware compression settings."""
         target_src = self._resolve_source()
         self.actual_source = target_src
         logger.info(f"Opening camera source: {target_src}")
 
         if isinstance(target_src, int) or (isinstance(target_src, str) and target_src.isdigit()):
             src_idx = int(target_src)
-            # Try V4L2 on Linux, DSHOW on Windows
             if sys.platform.startswith("linux"):
                 self.cap = cv2.VideoCapture(src_idx, cv2.CAP_V4L2)
             elif sys.platform.startswith("win"):
@@ -116,7 +99,6 @@ class CameraReader:
             if not self.cap.isOpened():
                 self.cap = cv2.VideoCapture(src_idx)
 
-            # Hardware MJPEG format setup for minimal USB bandwidth & latency
             if self.fourcc:
                 self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*self.fourcc))
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
@@ -134,7 +116,6 @@ class CameraReader:
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         else:
-            # Network RTSP stream or video file
             self.cap = cv2.VideoCapture(str(target_src))
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
@@ -155,7 +136,7 @@ class CameraReader:
 
         while self.running:
             if not self.cap or not self.cap.isOpened():
-                logger.warning("Camera disconnected. Retrying USB auto-discovery in 2.0s...")
+                logger.warning("Camera disconnected. Retrying stream connection in 2.0s...")
                 time.sleep(2.0)
                 self._open_capture()
                 continue
@@ -163,12 +144,10 @@ class CameraReader:
             ret, frame = self.cap.read()
             if not ret or frame is None:
                 time.sleep(0.01)
-                # Check if camera stream broke
                 if self.cap and not self.cap.isOpened():
                     self.device_info = "Disconnected"
                 continue
 
-            # Optional Underwater Image Enhancement (CLAHE + Contrast Normalization)
             if self.enable_enhancer:
                 frame = self.enhance_underwater_frame(frame)
 
@@ -184,7 +163,6 @@ class CameraReader:
                 t0 = time.time()
 
     def enhance_underwater_frame(self, frame):
-        """Applies CLAHE + LAB color space luminance equalization for murky underwater pipe frames."""
         try:
             lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
             l, a, b = cv2.split(lab)
@@ -195,7 +173,6 @@ class CameraReader:
             return frame
 
     def get_frame(self):
-        """Returns snapshot copy of the most recent frame."""
         with self.lock:
             if self.latest_frame is None:
                 return None
@@ -211,7 +188,6 @@ class CameraReader:
         self.enable_enhancer = enabled
 
     def stop(self):
-        """Stops capture worker and releases USB video resources."""
         self.running = False
         if self.thread and self.thread.is_alive():
             self.thread.join(timeout=1.0)

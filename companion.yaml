@@ -1,0 +1,39 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+supervisor:
+  restart_backoff_initial: "1s"
+  restart_backoff_max: "30s"
+  max_crash_count: 5
+
+video:
+  default_device: "/dev/video0"
+  watch_dir: "/dev"
+  default_format: "MJPG"
+  max_width: 1920
+  max_height: 1080
+  max_fps: 30
+  stream_port: 8081
+
+mavlink:
+  baud_rates: [115200, 57600, 921600]
+  heartbeat_timeout: "3s"
+  udp_endpoints:
+    - "127.0.0.1:14550"
+    - "192.168.2.1:14550"
+
+logging:
+  buffer_capacity: 1000
+  event_db_path: "events.db"
+
+health:
+  poll_interval: "2s"
+  watchdog_device: "/dev/watchdog"
+  enable_watchdog: false
+
+npu_detection:
+  enabled: true
+  python_bin: "python"
+  script_path: "main.py"
+  working_dir: "detection"
