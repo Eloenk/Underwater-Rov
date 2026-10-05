@@ -15,7 +15,6 @@ import (
 	"companion/pkg/health"
 	"companion/pkg/logging"
 	"companion/pkg/mavlink"
-	"companion/pkg/npu"
 	"companion/pkg/supervisor"
 	"companion/pkg/video"
 )
@@ -57,12 +56,10 @@ func main() {
 	healthMod := health.NewHealthModule(cfg.Health, logger)
 	videoMod := video.NewVideoModule(cfg.Video, logger)
 	mavlinkMod := mavlink.NewMAVLinkModule(cfg.MAVLink, logger)
-	npuMod := npu.NewNPUModule(cfg.NPUDetection, logger)
 
 	sup.RegisterModule(healthMod)
 	sup.RegisterModule(videoMod)
 	sup.RegisterModule(mavlinkMod)
-	sup.RegisterModule(npuMod)
 
 	apiServer := api.NewServer(cfg.Server, sup, logger, healthMod, videoMod, mavlinkMod)
 
@@ -94,4 +91,3 @@ func main() {
 	time.Sleep(500 * time.Millisecond)
 	fmt.Println("ROV Companion Computer Service stopped cleanly.")
 }
-

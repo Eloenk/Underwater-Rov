@@ -1,7 +1,10 @@
 package video
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/jpeg"
 	"path/filepath"
 	"syscall"
 	"unsafe"
@@ -14,12 +17,22 @@ const (
 	vidiocReqbufs        = 0xc0145608
 	vidiocQuerybuf       = 0xc0585609
 	vidiocQbuf           = 0xc058560f
-	vidiocDqbuf           = 0xc0585611
+	vidiocDqbuf          = 0xc0585611
 	vidiocStreamon       = 0x40045612
 	vidiocStreamoff      = 0x40045613
 	vidiocEnumFramesizes = 0xc02c564a
 	vidiocEnumFrameival  = 0xc034564b
+	vidiocSCtrl          = 0xc008561c
+	v4l2CidBrightness    = 0x00980900
+	v4l2CidContrast      = 0x00980901
+	v4l2CidHFlip         = 0x00980914
+	v4l2CidVFlip         = 0x00980915
 )
+
+type v4l2Control struct {
+	ID    uint32
+	Value int32
+}
 
 type v4l2Capability struct {
 	Driver       [16]byte
@@ -124,6 +137,7 @@ type V4L2Camera struct {
 	buffers     [][]byte
 	width       int
 	height      int
+	pixelFormat uint32
 	isStreaming bool
 }
 
@@ -138,12 +152,14 @@ func OpenV4L2Camera(devPath string, width, height, fps int) (*V4L2Camera, error)
 	pix := (*v4l2PixFormat)(unsafe.Pointer(&fmtStruct.Fmt[0]))
 	pix.Width = uint32(width)
 	pix.Height = uint32(height)
-	pix.PixelFormat = 0x47504a4d
+	pixFormat := uint32(0x47504a4d)
+	pix.PixelFormat = pixFormat
 	pix.Field = 1
 
 	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(vidiocSFmt), uintptr(unsafe.Pointer(&fmtStruct)))
 	if errno != 0 {
-		pix.PixelFormat = 0x56595559
+		pixFormat = 0x56595559
+		pix.PixelFormat = pixFormat
 		_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), uintptr(vidiocSFmt), uintptr(unsafe.Pointer(&fmtStruct)))
 		if errno != 0 {
 			_ = syscall.Close(fd)
@@ -201,6 +217,7 @@ func OpenV4L2Camera(devPath string, width, height, fps int) (*V4L2Camera, error)
 		buffers:     mappedBuffers,
 		width:       width,
 		height:      height,
+		pixelFormat: pixFormat,
 		isStreaming: true,
 	}, nil
 }
@@ -231,7 +248,54 @@ func (cam *V4L2Camera) ReadFrame() ([]byte, error) {
 
 	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, uintptr(cam.fd), uintptr(vidiocQbuf), uintptr(unsafe.Pointer(&buf)))
 
+	if cam.pixelFormat == 0x56595559 {
+		jpg, err := yuyvToJPEG(frame, cam.width, cam.height, 80)
+		if err == nil && len(jpg) > 0 {
+			return jpg, nil
+		}
+	}
+
 	return frame, nil
+}
+
+func yuyvToJPEG(yuyv []byte, w, h, quality int) ([]byte, error) {
+	if len(yuyv) < w*h*2 {
+		return nil, fmt.Errorf("buffer too small for YUYV frame")
+	}
+
+	img := image.NewYCbCr(image.Rect(0, 0, w, h), image.YCbCrSubsampleRatio422)
+
+	yIdx := 0
+	cIdx := 0
+	srcIdx := 0
+
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x += 2 {
+			y0 := yuyv[srcIdx]
+			u0 := yuyv[srcIdx+1]
+			y1 := yuyv[srcIdx+2]
+			v0 := yuyv[srcIdx+3]
+			srcIdx += 4
+
+			img.Y[yIdx] = y0
+			img.Y[yIdx+1] = y1
+			yIdx += 2
+
+			img.Cb[cIdx] = u0
+			img.Cr[cIdx] = v0
+			cIdx++
+		}
+	}
+
+	var buf bytes.Buffer
+	if quality <= 0 {
+		quality = 80
+	}
+	err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: quality})
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (cam *V4L2Camera) Close() {
@@ -247,6 +311,21 @@ func (cam *V4L2Camera) Close() {
 	}
 	_ = syscall.Close(cam.fd)
 	cam.fd = -1
+}
+
+func (cam *V4L2Camera) SetControl(id uint32, value int32) error {
+	if cam.fd <= 0 {
+		return fmt.Errorf("camera closed")
+	}
+	ctrl := v4l2Control{
+		ID:    id,
+		Value: value,
+	}
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, uintptr(cam.fd), uintptr(vidiocSCtrl), uintptr(unsafe.Pointer(&ctrl)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 func resolveUSBPath(devPath string) (string, error) {

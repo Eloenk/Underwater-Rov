@@ -165,6 +165,8 @@ func (s *Server) handleCameraConfig(w http.ResponseWriter, r *http.Request) {
 		Quality    int    `json:"quality"`
 		Brightness int    `json:"brightness"`
 		Contrast   int    `json:"contrast"`
+		HFlip      bool   `json:"hflip"`
+		VFlip      bool   `json:"vflip"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -172,7 +174,7 @@ func (s *Server) handleCameraConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.videoMod.ConfigureDevice(req.Path, req.Width, req.Height, req.FPS, req.Quality, req.Brightness, req.Contrast)
+	s.videoMod.ConfigureDevice(req.Path, req.Width, req.Height, req.FPS, req.Quality, req.Brightness, req.Contrast, req.HFlip, req.VFlip)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -495,7 +497,6 @@ const embeddedHTML = `<!DOCTYPE html>
                     <h3>Live Camera Inspection Stream</h3>
                     <div>
                         <button class="btn btn-primary" onclick="switchStream(8081)">Raw Feed (8081)</button>
-                        <button class="btn" style="background: #8b5cf6; color: white; margin-left: 8px;" onclick="switchStream(8082)">AI Overlay (8082)</button>
                     </div>
                 </div>
                 <div style="background: #0f172a; height: 340px; border-radius: 8px; display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 14px;">
@@ -624,6 +625,15 @@ const embeddedHTML = `<!DOCTYPE html>
                                 '<label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Contrast: <span id="v-contrast-' + devId + '">' + (dev.contrast !== undefined ? dev.contrast : 128) + '</span></label>' +
                                 '<input type="range" id="contrast-' + devId + '" min="0" max="255" value="' + (dev.contrast !== undefined ? dev.contrast : 128) + '" style="width:100%;" oninput="document.getElementById(\'v-contrast-' + devId + '\').innerText = this.value">' +
                             '</div>' +
+                            '<div>' +
+                                '<label style="display:block; font-size:11px; font-weight:600; color:var(--dim); margin-bottom:4px;">Flip / Orientation</label>' +
+                                '<label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text); cursor:pointer; margin-top:4px;">' +
+                                    '<input type="checkbox" id="hflip-' + devId + '" ' + (dev.hflip ? 'checked' : '') + ' onchange="updateStreamPreviewTransform(this.checked, document.getElementById(\'vflip-\' + \'' + devId + '\').checked)"> Horizontal Flip (Mirror)' +
+                                '</label>' +
+                                '<label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text); cursor:pointer; margin-top:4px;">' +
+                                    '<input type="checkbox" id="vflip-' + devId + '" ' + (dev.vflip ? 'checked' : '') + ' onchange="updateStreamPreviewTransform(document.getElementById(\'hflip-\' + \'' + devId + '\').checked, this.checked)"> Vertical Flip (Invert)' +
+                                '</label>' +
+                            '</div>' +
                         '</div>' +
                         '<button class="btn btn-primary" onclick="applyCameraAdjustments(\'' + dev.path + '\', \'' + devId + '\')">Apply Adjustments</button>' +
                     '</div>' +
@@ -632,6 +642,18 @@ const embeddedHTML = `<!DOCTYPE html>
             });
 
             container.innerHTML = html;
+            if (cachedDevices.length > 0) {
+                updateStreamPreviewTransform(cachedDevices[0].hflip, cachedDevices[0].vflip);
+            }
+        }
+
+        function updateStreamPreviewTransform(hflip, vflip) {
+            const img = document.getElementById('stream-preview');
+            if (!img) return;
+            let transforms = [];
+            if (hflip) transforms.push('scaleX(-1)');
+            if (vflip) transforms.push('scaleY(-1)');
+            img.style.transform = transforms.length > 0 ? transforms.join(' ') : 'none';
         }
 
         function togglePanel(devId, panelType) {
@@ -660,6 +682,8 @@ const embeddedHTML = `<!DOCTYPE html>
             const [w, h] = resVal.split('x').map(v => parseInt(v));
             const fps = parseInt(document.getElementById('fps-' + devId).value);
             const quality = parseInt(document.getElementById('qual-' + devId).value);
+            const hflip = document.getElementById('hflip-' + devId) ? document.getElementById('hflip-' + devId).checked : false;
+            const vflip = document.getElementById('vflip-' + devId) ? document.getElementById('vflip-' + devId).checked : false;
 
             const payload = {
                 path: devPath,
@@ -668,7 +692,9 @@ const embeddedHTML = `<!DOCTYPE html>
                 fps: fps,
                 quality: quality,
                 brightness: parseInt(document.getElementById('bright-' + devId).value),
-                contrast: parseInt(document.getElementById('contrast-' + devId).value)
+                contrast: parseInt(document.getElementById('contrast-' + devId).value),
+                hflip: hflip,
+                vflip: vflip
             };
 
             try {
@@ -694,6 +720,8 @@ const embeddedHTML = `<!DOCTYPE html>
             const quality = parseInt(document.getElementById('qual-' + devId).value);
             const brightness = parseInt(document.getElementById('bright-' + devId).value);
             const contrast = parseInt(document.getElementById('contrast-' + devId).value);
+            const hflip = document.getElementById('hflip-' + devId) ? document.getElementById('hflip-' + devId).checked : false;
+            const vflip = document.getElementById('vflip-' + devId) ? document.getElementById('vflip-' + devId).checked : false;
 
             const payload = {
                 path: devPath,
@@ -702,7 +730,9 @@ const embeddedHTML = `<!DOCTYPE html>
                 fps: fps,
                 quality: quality,
                 brightness: brightness,
-                contrast: contrast
+                contrast: contrast,
+                hflip: hflip,
+                vflip: vflip
             };
 
             try {
@@ -743,11 +773,12 @@ const embeddedHTML = `<!DOCTYPE html>
 
                 const hRes = await fetch('/api/v1/health');
                 const h = await hRes.json();
-                document.getElementById('sys-temp').innerText = h.temperature.toFixed(1) + '°C';
-                document.getElementById('cpu-load').innerText = h.cpu_load.toFixed(2);
-                document.getElementById('mem-used').innerText = h.memory_used_mb;
-                document.getElementById('mem-total').innerText = h.memory_total_mb;
-                document.getElementById('mem-pct').innerText = h.memory_percent.toFixed(1);
+                const tempVal = (h.temperature_celsius !== undefined && h.temperature_celsius > 0) ? h.temperature_celsius : ((h.temperature !== undefined && h.temperature > 0) ? h.temperature : 0);
+                document.getElementById('sys-temp').innerText = tempVal > 0 ? tempVal.toFixed(1) + '°C' : 'N/A';
+                document.getElementById('cpu-load').innerText = (h.cpu_load !== undefined) ? h.cpu_load.toFixed(1) + '%' : '0.0%';
+                document.getElementById('mem-used').innerText = h.memory_used_mb || 0;
+                document.getElementById('mem-total').innerText = h.memory_total_mb || 0;
+                document.getElementById('mem-pct').innerText = (h.memory_percent !== undefined) ? h.memory_percent.toFixed(1) : '0.0';
 
                 const mRes = await fetch('/api/v1/mavlink');
                 const m = await mRes.json();
@@ -804,6 +835,7 @@ const embeddedHTML = `<!DOCTYPE html>
 
         fetchCameraDevices();
         setInterval(updateDashboard, 2000);
+        setInterval(fetchCameraDevices, 10000);
         updateDashboard();
     </script>
 </body>

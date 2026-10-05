@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"companion/pkg/config"
 	"companion/pkg/logging"
@@ -41,6 +43,7 @@ type MAVLinkModule struct {
 	serialMu     sync.Mutex
 	status       LinkStatus
 	udpConns     []*net.UDPConn
+	listenerConn *net.UDPConn
 	activeSerial io.ReadWriteCloser
 	serialPort   string
 	packetsRx    uint64
@@ -64,6 +67,16 @@ func (m *MAVLinkModule) Name() string {
 
 func (m *MAVLinkModule) Start(ctx context.Context) error {
 	m.logger.Log("mavlink", logging.LevelInfo, "Initializing Bi-Directional MAVLink Router & Packet Parser...")
+
+	laddr, err := net.ResolveUDPAddr("udp", "0.0.0.0:14550")
+	if err == nil {
+		lconn, err := net.ListenUDP("udp", laddr)
+		if err == nil {
+			m.listenerConn = lconn
+			m.logger.Log("mavlink", logging.LevelInfo, "MAVLink UDP server listening on 0.0.0.0:14550")
+			go m.udpReadLoop(ctx, lconn)
+		}
+	}
 
 	for _, ep := range m.cfg.UDPEndpoints {
 		raddr, err := net.ResolveUDPAddr("udp", ep)
@@ -170,6 +183,11 @@ func (m *MAVLinkModule) udpBroadcastLoop(ctx context.Context) {
 			m.mu.RLock()
 			for _, conn := range m.udpConns {
 				_, _ = conn.Write(pkt)
+			}
+			if m.listenerConn != nil {
+				for _, gcsAddr := range m.gcsAddrs {
+					_, _ = m.listenerConn.WriteToUDP(pkt, gcsAddr)
+				}
 			}
 			m.mu.RUnlock()
 		}
@@ -350,10 +368,43 @@ func (m *MAVLinkModule) onMAVLinkPacket(magic byte, sysID, compID uint8, msgID u
 }
 
 func openSerialPort(port string, baud int) (io.ReadWriteCloser, error) {
-	f, err := os.OpenFile(port, os.O_RDWR, 0)
+	f, err := os.OpenFile(port, os.O_RDWR|syscall.O_NOCTTY, 0)
 	if err != nil {
 		return nil, err
 	}
+
+	fd := f.Fd()
+
+	var termios syscall.Termios
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCGETS), uintptr(unsafe.Pointer(&termios))); errno == 0 {
+		termios.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON | syscall.IXOFF
+		termios.Oflag &^= syscall.OPOST
+		termios.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+		termios.Cflag &^= syscall.CSIZE | syscall.PARENB
+		termios.Cflag |= syscall.CS8 | syscall.CLOCAL | syscall.CREAD
+
+		baudConst := uint32(syscall.B115200)
+		switch baud {
+		case 57600:
+			baudConst = syscall.B57600
+		case 115200:
+			baudConst = syscall.B115200
+		case 230400:
+			baudConst = syscall.B230400
+		case 460800:
+			baudConst = syscall.B460800
+		case 921600:
+			baudConst = syscall.B921600
+		}
+		termios.Ispeed = baudConst
+		termios.Ospeed = baudConst
+
+		_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TCSETS), uintptr(unsafe.Pointer(&termios)))
+	}
+
+	bits := int(syscall.TIOCM_DTR | syscall.TIOCM_RTS)
+	_, _, _ = syscall.Syscall(syscall.SYS_IOCTL, fd, uintptr(syscall.TIOCMBIS), uintptr(unsafe.Pointer(&bits)))
+
 	return f, nil
 }
 
@@ -377,6 +428,10 @@ func (m *MAVLinkModule) Stop() error {
 	if m.activeSerial != nil {
 		_ = m.activeSerial.Close()
 		m.activeSerial = nil
+	}
+	if m.listenerConn != nil {
+		_ = m.listenerConn.Close()
+		m.listenerConn = nil
 	}
 	for _, conn := range m.udpConns {
 		_ = conn.Close()

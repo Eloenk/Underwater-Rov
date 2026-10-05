@@ -15,7 +15,6 @@ type Config struct {
 	MAVLink    MAVLinkConfig    `yaml:"mavlink"`
 	Logging    LoggingConfig    `yaml:"logging"`
 	Health     HealthConfig     `yaml:"health"`
-	NPUDetection NPUDetectionConfig `yaml:"npu_detection"`
 }
 
 type ServerConfig struct {
@@ -58,13 +57,6 @@ type HealthConfig struct {
 	PollIntervalRaw string     `yaml:"poll_interval"`
 	WatchdogDevice string      `yaml:"watchdog_device"`
 	EnableWatchdog bool        `yaml:"enable_watchdog"`
-}
-
-type NPUDetectionConfig struct {
-	Enabled    bool   `yaml:"enabled"`
-	PythonBin  string `yaml:"python_bin"`
-	ScriptPath string `yaml:"script_path"`
-	WorkingDir string `yaml:"working_dir"`
 }
 
 func LoadConfig(path string) (*Config, error) {

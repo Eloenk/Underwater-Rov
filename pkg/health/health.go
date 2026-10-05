@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -16,12 +17,13 @@ import (
 )
 
 type SystemStats struct {
-	CPULoad     float64   `json:"cpu_load"`
-	MemoryUsed  uint64    `json:"memory_used_mb"`
-	MemoryTotal uint64    `json:"memory_total_mb"`
-	MemPercent  float64   `json:"memory_percent"`
-	Temperature float64   `json:"temperature_celsius"`
-	Timestamp   time.Time `json:"timestamp"`
+	CPULoad            float64   `json:"cpu_load"`
+	MemoryUsed         uint64    `json:"memory_used_mb"`
+	MemoryTotal        uint64    `json:"memory_total_mb"`
+	MemPercent         float64   `json:"memory_percent"`
+	Temperature        float64   `json:"temperature"`
+	TemperatureCelsius float64   `json:"temperature_celsius"`
+	Timestamp          time.Time `json:"timestamp"`
 }
 
 type HealthModule struct {
@@ -57,6 +59,8 @@ func (h *HealthModule) Start(ctx context.Context) error {
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
+
+	h.updateStats()
 
 	for {
 		select {
@@ -106,7 +110,9 @@ func (h *HealthModule) updateStats() {
 
 	stats.CPULoad = readCPULoad()
 	stats.MemoryTotal, stats.MemoryUsed, stats.MemPercent = readMemoryStats()
-	stats.Temperature = readSoCTemperature()
+	tVal := readSoCTemperature()
+	stats.Temperature = tVal
+	stats.TemperatureCelsius = tVal
 
 	h.mu.Lock()
 	h.lastStats = stats
@@ -141,7 +147,60 @@ func (h *HealthModule) Status() supervisor.ModuleStatus {
 	}
 }
 
+var (
+	cpuMu     sync.Mutex
+	prevTotal uint64
+	prevIdle  uint64
+)
+
 func readCPULoad() float64 {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return readCPULoadAvg()
+	}
+
+	lines := strings.Split(string(data), "\n")
+	if len(lines) == 0 {
+		return readCPULoadAvg()
+	}
+
+	fields := strings.Fields(lines[0])
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return readCPULoadAvg()
+	}
+
+	var total, idle uint64
+	for i := 1; i < len(fields); i++ {
+		val, _ := strconv.ParseUint(fields[i], 10, 64)
+		total += val
+		if i == 4 || i == 5 {
+			idle += val
+		}
+	}
+
+	cpuMu.Lock()
+	defer cpuMu.Unlock()
+
+	if prevTotal == 0 {
+		prevTotal = total
+		prevIdle = idle
+		return readCPULoadAvg()
+	}
+
+	diffTotal := total - prevTotal
+	diffIdle := idle - prevIdle
+	prevTotal = total
+	prevIdle = idle
+
+	if diffTotal == 0 {
+		return 0.0
+	}
+
+	pct := (float64(diffTotal-diffIdle) / float64(diffTotal)) * 100.0
+	return pct
+}
+
+func readCPULoadAvg() float64 {
 	data, err := os.ReadFile("/proc/loadavg")
 	if err != nil {
 		return 0.0
@@ -169,7 +228,7 @@ func readMemoryStats() (totalMB uint64, usedMB uint64, percent float64) {
 	}
 
 	lines := strings.Split(string(data), "\n")
-	var memTotal, memAvailable uint64
+	var memTotal, memAvailable, memFree, buffers, cached uint64
 	for _, line := range lines {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 {
@@ -180,22 +239,49 @@ func readMemoryStats() (totalMB uint64, usedMB uint64, percent float64) {
 			case "MemAvailable:":
 				v, _ := strconv.ParseUint(fields[1], 10, 64)
 				memAvailable = v / 1024
+			case "MemFree:":
+				v, _ := strconv.ParseUint(fields[1], 10, 64)
+				memFree = v / 1024
+			case "Buffers:":
+				v, _ := strconv.ParseUint(fields[1], 10, 64)
+				buffers = v / 1024
+			case "Cached:":
+				v, _ := strconv.ParseUint(fields[1], 10, 64)
+				cached = v / 1024
 			}
 		}
 	}
+
 	if memTotal > 0 {
-		memUsed := memTotal - memAvailable
+		var memUsed uint64
+		if memAvailable > 0 {
+			memUsed = memTotal - memAvailable
+		} else {
+			memUsed = memTotal - (memFree + buffers + cached)
+		}
 		pct := (float64(memUsed) / float64(memTotal)) * 100.0
 		return memTotal, memUsed, pct
 	}
+
 	return 0, 0, 0.0
 }
 
 func readSoCTemperature() float64 {
 	thermalPaths := []string{
+		"/etc/armbianmonitor/data/cpu_temp",
 		"/sys/class/thermal/thermal_zone0/temp",
 		"/sys/class/thermal/thermal_zone1/temp",
+		"/sys/class/thermal/thermal_zone2/temp",
+		"/sys/class/hwmon/hwmon0/temp1_input",
+		"/sys/class/hwmon/hwmon1/temp1_input",
+		"/sys/class/hwmon/hwmon2/temp1_input",
 	}
+
+	matches, _ := filepath.Glob("/sys/class/thermal/thermal_zone*/temp")
+	thermalPaths = append(thermalPaths, matches...)
+
+	hwMatches, _ := filepath.Glob("/sys/class/hwmon/hwmon*/temp*_input")
+	thermalPaths = append(thermalPaths, hwMatches...)
 
 	for _, p := range thermalPaths {
 		data, err := os.ReadFile(p)
@@ -206,10 +292,11 @@ func readSoCTemperature() float64 {
 				if val > 1000 {
 					val /= 1000.0
 				}
-				return val
+				if val >= 1.0 && val <= 125.0 {
+					return val
+				}
 			}
 		}
 	}
 	return 0.0
 }
-
